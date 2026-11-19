@@ -626,7 +626,7 @@ class LT_Node(Node):
         model_constraints = [without_name(constraint) for constraint in cls._meta.constraints]
         name_context = {"app_label": cls._meta.app_label.lower(), "class": cls.__name__.lower()}
         return [
-            checks.Error(
+            checks.Warning(
                 f"{cls.__name__} does not have the '{constraint.name % name_context}' constraint "
                 "that is defined in LT_Node.Meta.constraints.",
                 hint=(
@@ -634,7 +634,7 @@ class LT_Node(Node):
                     "and if that sets constraints it must include LT_Node.Meta.constraints."
                 ),
                 obj=cls,
-                id="treebeard.E002",
+                id="treebeard.W001",
             )
             for constraint in LT_Node.Meta.constraints
             if without_name(constraint) not in model_constraints
@@ -647,10 +647,5 @@ class LT_Node(Node):
                 name="%(app_label)s_%(class)s_deferred_unique_path",
                 fields=["path"],
                 deferrable=models.Deferrable.DEFERRED,
-            ),
-            # A node with an empty path has a depth of 0, and is an ancestor of every other node
-            models.CheckConstraint(
-                name="%(app_label)s_%(class)s_path_not_empty",
-                condition=Q(path__depth__gt=0),
-            ),
+            )
         ]

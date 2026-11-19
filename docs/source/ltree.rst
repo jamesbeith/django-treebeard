@@ -49,10 +49,10 @@ To use the ``ltree`` module, you need to create the extension in your database:
 
   .. warning::
 
-     ``LT_Node`` defines database constraints on :attr:`path` in its ``Meta`` class: paths must
-     be unique, and must not be empty. A model that defines its own ``Meta`` class only keeps
-     them if that class inherits from ``LT_Node.Meta``, and if it sets ``constraints``, includes
-     the inherited ones:
+     ``LT_Node`` defines a database constraint in its ``Meta`` class that requires each
+     :attr:`path` to be unique. A model that defines its own ``Meta`` class only keeps it if that
+     class inherits from ``LT_Node.Meta``, and if it sets ``constraints``, includes the inherited
+     ones:
 
      .. code-block:: python
 
@@ -65,12 +65,15 @@ To use the ``ltree`` module, you need to create the extension in your database:
                  models.UniqueConstraint(name="unique_category_name", fields=["name"]),
               ]
 
-     The ``treebeard.E002`` system check reports a model that is missing either constraint.
+     The ``treebeard.W001`` system check reports a model that is missing the constraint.
 
      Nodes must be created with :meth:`~treebeard.models.NodeManager.add_root`,
      :meth:`~treebeard.models.NodeManager.add_child` or
-     :meth:`~treebeard.models.NodeManager.add_sibling`. Creating one with ``objects.create()``
-     or ``save()`` leaves its path empty, which the database rejects.
+     :meth:`~treebeard.models.NodeManager.add_sibling`. Creating one with ``objects.create()``,
+     ``save()`` or ``bulk_create()`` leaves its path empty, which raises a ``ValueError``. This
+     isn't enforced by the database, so ``bulk_update()``, ``QuerySet.update()`` and fixtures
+     must not set an empty path: a node with an empty path is an ancestor of every other node,
+     and deleting it deletes the whole tree.
 
 
   Example:

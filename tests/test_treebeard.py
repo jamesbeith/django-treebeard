@@ -18,8 +18,8 @@ from django.contrib.messages.storage.fallback import FallbackStorage
 from django.core import checks
 from django.core.checks.model_checks import check_all_models
 from django.core.exceptions import PermissionDenied
-from django.db import IntegrityError, transaction
-from django.db.models import CheckConstraint, Deferrable, Manager, ProtectedError, Q, UniqueConstraint
+from django.db import transaction
+from django.db.models import CheckConstraint, Manager, ProtectedError, Q, UniqueConstraint
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.forms import ValidationError
@@ -5334,7 +5334,7 @@ class TestChecks:
         assert errors[0].id == "treebeard.E001"
         assert "does not subclass treebeard." in errors[0].msg
 
-    def test_checks_error_if_lt_model_is_missing_the_path_constraints(self):
+    def test_checks_warning_if_lt_model_is_missing_the_path_constraints(self):
         with isolate_apps("tests"):
             # A Meta that doesn't inherit from LT_Node.Meta drops its constraints
             class NodeWithOwnMeta(LT_Node):
@@ -5345,7 +5345,7 @@ class TestChecks:
             class NodeWithOwnConstraints(LT_Node):
                 class Meta(LT_Node.Meta):
                     constraints = [
-                        UniqueConstraint(name="unique_path", fields=["path"], deferrable=Deferrable.DEFERRED),
+                        UniqueConstraint(name="unique_path", fields=["path"]),
                     ]
 
             class NodeWithInheritedMeta(LT_Node):
@@ -5368,21 +5368,59 @@ class TestChecks:
         assert NodeWithExtraConstraints.check() == []
         assert NodeChild.check() == []
 
-        errors = NodeWithOwnMeta.check()
-        assert [error.id for error in errors] == ["treebeard.E002", "treebeard.E002"]
-        assert all(isinstance(error, checks.Error) for error in errors)
-        assert "'tests_nodewithownmeta_deferred_unique_path'" in errors[0].msg
-        assert "'tests_nodewithownmeta_path_not_empty'" in errors[1].msg
+        warnings = NodeWithOwnMeta.check()
+        assert [warning.id for warning in warnings] == ["treebeard.W001"]
+        assert isinstance(warnings[0], checks.Warning)
+        assert "'tests_nodewithownmeta_deferred_unique_path'" in warnings[0].msg
 
-        errors = NodeWithOwnConstraints.check()
-        assert [error.id for error in errors] == ["treebeard.E002"]
-        assert "'tests_nodewithownconstraints_path_not_empty'" in errors[0].msg
+        warnings = NodeWithOwnConstraints.check()
+        assert [warning.id for warning in warnings] == ["treebeard.W001"]
+        assert "'tests_nodewithownconstraints_deferred_unique_path'" in warnings[0].msg
 
 
 @pytest.mark.django_db
 class TestLT_EmptyPath(TestTreeBase):
+    # Nodes must be created with add_root(), add_child() or add_sibling(). A node saved with
+    # an empty path has a depth of 0, and is the ancestor of every other node. An error while
+    # saving marks the enclosing transaction for rollback, so these tests use a savepoint.
+
     def test_create_without_a_path_is_rejected(self, lt_model):
-        # Nodes must be created with add_root(), add_child() or add_sibling(). A node saved
-        # with an empty path has a depth of 0, and is the ancestor of every other node.
-        with pytest.raises(IntegrityError), transaction.atomic():
+        with pytest.raises(ValueError, match="path must not be empty"), transaction.atomic():
             lt_model.objects.create(desc="1")
+        assert not lt_model.objects.exists()
+
+    def test_bulk_create_without_a_path_is_rejected(self, lt_model):
+        with pytest.raises(ValueError, match="path must not be empty"), transaction.atomic():
+            lt_model.objects.bulk_create([lt_model(desc="1")])
+        assert not lt_model.objects.exists()
+
+    @pytest.mark.parametrize("path", ["", " ", []])
+    def test_save_with_an_empty_path_is_rejected(self, lt_model, path):
+        with pytest.raises(ValueError, match="path must not be empty"), transaction.atomic():
+            lt_model(desc="1", path=path).save()
+        assert not lt_model.objects.exists()
+
+    def test_emptying_the_path_of_a_saved_node_is_rejected(self, lt_model):
+        node = lt_model.objects.add_root({"desc": "1"})
+        path = node.path
+        node.path = ""
+        with pytest.raises(ValueError, match="path must not be empty"), transaction.atomic():
+            node.save()
+        assert lt_model.objects.get(pk=node.pk).path == path
+
+    def test_save_with_a_deferred_path_is_allowed(self, lt_model):
+        pk = lt_model.objects.add_root({"desc": "1"}).pk
+        node = lt_model.objects.only("desc").get(pk=pk)
+        node.desc = "2"
+        node.save()
+        assert lt_model.objects.get(pk=pk).desc == "2"
+
+    def test_save_that_does_not_update_the_path_is_allowed(self, lt_model):
+        node = lt_model.objects.add_root({"desc": "1"})
+        path = node.path
+        node.path = ""
+        node.desc = "2"
+        node.save(update_fields=["desc"])
+        saved = lt_model.objects.get(pk=node.pk)
+        assert saved.desc == "2"
+        assert saved.path == path

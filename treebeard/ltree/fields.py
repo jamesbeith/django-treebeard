@@ -74,6 +74,14 @@ class PathField(TextField):
     def db_type(self, connection):
         return "ltree"
 
+    def pre_save(self, model_instance, add):
+        value = super().pre_save(model_instance, add)
+        # A node with an empty path has a depth of 0, and is an ancestor of every other node.
+        # Compare the string form, as a blank string becomes a `PathValue` with one empty label.
+        if not str(value):
+            raise ValueError("A node's path must not be empty. Use add_root(), add_child() or add_sibling().")
+        return value
+
     def formfield(self, **kwargs):
         kwargs["form_class"] = PathFormField
         kwargs["widget"] = TextInput(attrs={"class": "vTextField"})
